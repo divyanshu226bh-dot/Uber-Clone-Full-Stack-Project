@@ -237,3 +237,165 @@ Replace `http://localhost:3000` with your server's base URL and port.
 ## Security note
 
 The controller returns the Mongoose `user` document in the response. Although the schema declares `password` with `select: false`, the login query explicitly selects it with `.select('+password')` for password comparison. But the password is not getting delivered to the user it is removed from the user object before sending the response.
+
+---
+
+# User Profile API
+
+Documentation for the `GET /users/profile` endpoint.
+
+## Endpoint
+
+- **Method:** `GET`
+- **URL:** `/users/profile`
+- **Purpose:** Returns the currently authenticated user's profile.
+- **Authentication:** Required. The route uses `authMiddleware.authUser`.
+
+The URL assumes `user.routes.js` is mounted at `/users` in the main Express application.
+
+## Authentication
+
+The middleware accepts the JWT in either of these places:
+
+1. The `token` cookie set by the login endpoint.
+2. The `Authorization` request header using the Bearer scheme.
+
+Example header:
+
+```http
+Authorization: Bearer <jwt-token>
+```
+
+If using cookie-based authentication, send the request with cookies included in your HTTP client.
+
+## Request body
+
+No request body is required.
+
+## Responses
+
+### `200 OK` — Profile retrieved
+
+The controller responds with `req.user`, which is populated by the authentication middleware after it verifies the JWT and loads the user from the database.
+
+Example response shape:
+
+```json
+{
+  "_id": "670000000000000000000001",
+  "fullname": {
+    "firstname": "Divyanshu",
+    "lastname": "Sharma"
+  },
+  "email": "divyanshu@example.com",
+  "__v": 0
+}
+```
+
+The exact fields depend on the current user schema. The middleware loads the user with `findById()` and does not explicitly select the password field, which is declared with `select: false` in the schema.
+
+### `401 Unauthorized` — Authentication failed
+
+Returned by the authentication middleware if the token is missing, invalid, or present in the blacklist. JWT expiry only applies if expiry is configured when signing the token.
+
+```json
+{
+  "message": "Unauthorized"
+}
+```
+
+## Status codes implemented by this endpoint
+
+| Status code | Meaning | When it is returned |
+|---|---|---|
+| `200 OK` | Profile retrieved | A valid, non-blacklisted token identifies a user. |
+| `401 Unauthorized` | Authentication failed | No usable token is provided, the token is invalid, or it has been blacklisted. |
+
+## Example request with cURL
+
+Using a Bearer token:
+
+```bash
+curl http://localhost:3000/users/profile \
+  -H "Authorization: Bearer <jwt-token>"
+```
+
+If your login flow uses the `token` cookie, you can instead send that cookie with the request.
+
+---
+
+# User Logout API
+
+Documentation for the `GET /users/logout` endpoint.
+
+## Endpoint
+
+- **Method:** `GET`
+- **URL:** `/users/logout`
+- **Purpose:** Logs out the currently authenticated user by clearing the `token` cookie and adding the current JWT to the token blacklist.
+- **Authentication:** Required. The route uses `authMiddleware.authUser`.
+
+The URL assumes `user.routes.js` is mounted at `/users` in the main Express application.
+
+## Authentication
+
+Provide the same token used for authenticated requests: either the `token` cookie or an `Authorization: Bearer <jwt-token>` header.
+
+## Request body
+
+No request body is required.
+
+## How logout works
+
+1. The authentication middleware checks for a token in the cookie or Authorization header.
+2. The middleware rejects a missing or blacklisted token and verifies the JWT.
+3. The controller clears the `token` cookie.
+4. The controller stores the token in the blacklist.
+5. The endpoint returns a success message.
+
+The blacklist schema configures its `createdAt` field with a MongoDB TTL of 86,400 seconds (24 hours).
+
+## Responses
+
+### `200 OK` — Logout successful
+
+```json
+{
+  "message": "Logged out successfully"
+}
+```
+
+### `401 Unauthorized` — Authentication failed
+
+The authentication middleware returns this response if the token is missing, invalid, or already blacklisted.
+
+```json
+{
+  "message": "Unauthorized"
+}
+```
+
+## Status codes implemented by this endpoint
+
+| Status code | Meaning | When it is returned |
+|---|---|---|
+| `200 OK` | Logout successful | The authenticated token is added to the blacklist and the cookie is cleared. |
+| `401 Unauthorized` | Authentication failed | The request does not contain a usable token, or the token is invalid or blacklisted. |
+
+Database or unexpected server errors are not explicitly mapped to a status code in this controller; their response depends on the application's error-handling middleware.
+
+## Example request with cURL
+
+Using a Bearer token:
+
+```bash
+curl -X GET http://localhost:3000/users/logout \
+  -H "Authorization: Bearer <jwt-token>"
+```
+
+For cookie-based authentication, send the `token` cookie with the request. The server clears that cookie in the response.
+
+## Implementation note
+
+The logout controller reads the token from `req.cookies.token` or the Authorization header after clearing the cookie in the response. Clearing the response cookie does not normally remove the already-parsed request cookie, so the existing token can still be read during that request. For robustness, consider extracting the token before calling `res.clearCookie()`, and use optional chaining when reading the Authorization header.
+
