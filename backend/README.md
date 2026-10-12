@@ -399,3 +399,163 @@ For cookie-based authentication, send the `token` cookie with the request. The s
 
 The logout controller reads the token from `req.cookies.token` or the Authorization header after clearing the cookie in the response. Clearing the response cookie does not normally remove the already-parsed request cookie, so the existing token can still be read during that request. For robustness, consider extracting the token before calling `res.clearCookie()`, and use optional chaining when reading the Authorization header.
 
+---
+
+# Captain Registration API
+
+Documentation for the `POST /captains/register` endpoint.
+
+## Endpoint
+
+- **Method:** `POST`
+- **URL:** `/captains/register`
+- **Purpose:** Registers a new captain with personal and vehicle details, then returns a JWT authentication token and the created captain object.
+
+The URL is confirmed by `app.js`, which mounts the captain routes at `/captains`.
+
+## Request body
+
+Send the data as JSON with the `Content-Type: application/json` header.
+
+```json
+{
+  "fullname": {
+    "firstname": "Rahul",
+    "lastname": "Sharma"
+  },
+  "email": "rahul@example.com",
+  "password": "examplePassword123",
+  "vehicle": {
+    "color": "White",
+    "plate": "RJ14AB1234",
+    "capacity": 4,
+    "vehicleType": "car"
+  }
+}
+```
+
+### Fields
+
+| Field | Type | Required? | Rules / notes |
+|---|---|---:|---|
+| `fullname` | Object | Yes in practice | Contains the captain's name fields. |
+| `fullname.firstname` | String | Yes | Must be at least 3 characters. |
+| `fullname.lastname` | String | Optional in route validator/schema | If provided, it must be at least 3 characters according to the schema. |
+| `email` | String | Yes | Must be a valid email address. The schema converts it to lowercase and marks it as unique. |
+| `password` | String | Yes | Must be at least 6 characters. The server hashes it with bcrypt using 10 salt rounds. |
+| `vehicle` | Object | Yes in practice | Contains the captain's vehicle information. |
+| `vehicle.color` | String | Yes | Must be at least 3 characters. |
+| `vehicle.plate` | String | Yes | Must be at least 3 characters. |
+| `vehicle.capacity` | Integer | Yes | Must be at least 1. |
+| `vehicle.vehicleType` | String | Yes | Must be one of `car`, `motorcycle`, or `auto`. |
+
+The request uses nested fields: `fullname.firstname`, `fullname.lastname`, and `vehicle.*`.
+
+## How registration works
+
+1. Express Validator checks the request fields.
+2. The controller checks whether a captain with the submitted email already exists.
+3. If the email is already registered, the endpoint returns `400 Bad Request`.
+4. Otherwise, the password is hashed and the captain record is created.
+5. A JWT is generated. The captain model configures it to expire after 24 hours.
+6. The endpoint responds with `201 Created`, the token, and the captain object.
+
+## Responses
+
+### `201 Created` — Registration successful
+
+The controller returns a JSON object containing `token` and `captain`.
+
+Example response shape:
+
+```json
+{
+  "token": "<jwt-token>",
+  "captain": {
+    "_id": "670000000000000000000002",
+    "fullname": {
+      "firstname": "Rahul",
+      "lastname": "Sharma"
+    },
+    "email": "rahul@example.com",
+    "status": "inactive",
+    "vehicle": {
+      "color": "White",
+      "plate": "RJ14AB1234",
+      "capacity": 4,
+      "vehicleType": "car"
+    },
+    "__v": 0
+  }
+}
+```
+
+This is an example response shape; generated IDs and serialized fields will vary.
+
+### `400 Bad Request` — Validation failed
+
+Returned when one or more Express Validator checks fail. The response contains an `errors` array.
+
+Example:
+
+```json
+{
+  "errors": [
+    {
+      "type": "field",
+      "value": "not-an-email",
+      "msg": "Invalid Email",
+      "path": "email",
+      "location": "body"
+    }
+  ]
+}
+```
+
+The exact error object depends on which field failed validation.
+
+### `400 Bad Request` — Captain already exists
+
+Returned when the controller finds an existing captain with the submitted email.
+
+```json
+{
+  "message": "Captain already exist"
+}
+```
+
+## Status codes implemented by this endpoint
+
+| Status code | Meaning | When it is returned |
+|---|---|---|
+| `201 Created` | Registration successful | The captain is created and the response includes a JWT and captain object. |
+| `400 Bad Request` | Request validation failed | Email is invalid, first name is shorter than 3 characters, password is shorter than 6 characters, or vehicle fields fail validation. |
+| `400 Bad Request` | Captain already exists | A captain with the submitted email is already present. |
+
+## Example request with cURL
+
+```bash
+curl -X POST http://localhost:3000/captains/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fullname": {
+      "firstname": "Rahul",
+      "lastname": "Sharma"
+    },
+    "email": "rahul@example.com",
+    "password": "examplePassword123",
+    "vehicle": {
+      "color": "White",
+      "plate": "RJ14AB1234",
+      "capacity": 4,
+      "vehicleType": "car"
+    }
+  }'
+```
+
+Replace `http://localhost:3000` with your server's base URL and port.
+
+## Security note
+
+The captain schema declares `password` with `select: false`, but the registration controller returns the newly created `captain` document directly. To avoid exposing the password hash, remove `password` from a plain object or return a safe captain object containing only public fields before sending the response.
+
