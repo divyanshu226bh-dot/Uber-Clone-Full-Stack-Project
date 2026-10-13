@@ -559,3 +559,297 @@ Replace `http://localhost:3000` with your server's base URL and port.
 
 The captain schema declares `password` with `select: false`, but the registration controller returns the newly created `captain` document directly. To avoid exposing the password hash, remove `password` from a plain object or return a safe captain object containing only public fields before sending the response.
 
+
+---
+
+# Captain Login API
+
+Documentation for the `POST /captains/login` endpoint.
+
+## Endpoint
+
+- **Method:** `POST`
+- **URL:** `/captains/login`
+- **Purpose:** Authenticates an existing captain using email and password, then returns a JWT and captain object.
+
+The URL assumes the captain router is mounted at `/captains` in the main Express application.
+
+## Request body
+
+Send JSON with the `Content-Type: application/json` header.
+
+```json
+{
+  "email": "rahul@example.com",
+  "password": "examplePassword123"
+}
+```
+
+### Fields
+
+| Field | Type | Required? | Rules / notes |
+|---|---|---:|---|
+| `email` | String | Yes | Must be a valid email address. |
+| `password` | String | Yes | Must be at least 6 characters according to the route validator. |
+
+## How login works
+
+1. Express Validator checks the email and password fields.
+2. The controller searches for a captain by email and explicitly selects the password field for verification.
+3. If no captain is found, the endpoint returns `401 Unauthorized`.
+4. If the password does not match, the endpoint returns `401 Unauthorized`.
+5. If the credentials match, the server generates a JWT, sets it in the `token` cookie, removes the password from the response object, and returns the token and captain object.
+
+The same error message is used for an unknown email and an incorrect password: `Invalid email or password`.
+
+## Responses
+
+### `200 OK` — Login successful
+
+```json
+{
+  "token": "<jwt-token>",
+  "captain": {
+    "_id": "670000000000000000000002",
+    "fullname": {
+      "firstname": "Rahul",
+      "lastname": "Sharma"
+    },
+    "email": "rahul@example.com",
+    "status": "inactive",
+    "vehicle": {
+      "color": "White",
+      "plate": "RJ14AB1234",
+      "capacity": 4,
+      "vehicleType": "car"
+    },
+    "__v": 0
+  }
+}
+```
+
+This is an example response shape; the actual fields depend on the captain schema and serialized document. The password is explicitly removed before the captain object is returned.
+
+### `400 Bad Request` — Validation failed
+
+Returned when the email is not valid or the password is shorter than 6 characters. The response contains an `errors` array.
+
+```json
+{
+  "errors": [
+    {
+      "type": "field",
+      "value": "not-an-email",
+      "msg": "Invalid Email",
+      "path": "email",
+      "location": "body"
+    }
+  ]
+}
+```
+
+The exact error object depends on the field that failed validation.
+
+### `401 Unauthorized` — Invalid credentials
+
+Returned when the email is not associated with a captain or the password is incorrect.
+
+```json
+{
+  "message": "Invalid email or password"
+}
+```
+
+## Status codes implemented by this endpoint
+
+| Status code | Meaning | When it is returned |
+|---|---|---|
+| `200 OK` | Login successful | Credentials match; the response includes a JWT and captain object. |
+| `400 Bad Request` | Request validation failed | Email is invalid or password is shorter than 6 characters. |
+| `401 Unauthorized` | Authentication failed | Captain does not exist for the email, or the password is incorrect. |
+
+## Example request with cURL
+
+```bash
+curl -X POST http://localhost:3000/captains/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "rahul@example.com",
+    "password": "examplePassword123"
+  }'
+```
+
+Replace `http://localhost:3000` with your server's base URL and port.
+
+## Authentication cookie note
+
+On successful login, the controller sets a cookie named `token`. The JWT is also returned in the JSON response, so clients can use either the cookie or an `Authorization: Bearer <jwt-token>` header for protected captain routes.
+
+---
+
+# Captain Profile API
+
+Documentation for the `GET /captains/profile` endpoint.
+
+## Endpoint
+
+- **Method:** `GET`
+- **URL:** `/captains/profile`
+- **Purpose:** Returns the currently authenticated captain's profile.
+- **Authentication:** Required. The route uses `authMiddleware.authCaptain`.
+
+## Authentication
+
+The middleware accepts the JWT from either:
+
+1. The `token` cookie.
+2. The `Authorization` header using the Bearer scheme.
+
+Example header:
+
+```http
+Authorization: Bearer <jwt-token>
+```
+
+If using cookie-based authentication, send the request with cookies included in your HTTP client.
+
+## Request body
+
+No request body is required.
+
+## How the endpoint works
+
+1. The authentication middleware reads the token from the cookie or Authorization header.
+2. It rejects missing or blacklisted tokens, verifies the JWT, and loads the captain by the ID in the token.
+3. The middleware attaches the captain document to `req.captain`.
+4. The controller returns `req.captain` with status `200 OK`.
+
+## Responses
+
+### `200 OK` — Profile retrieved
+
+Example response shape:
+
+```json
+{
+  "_id": "670000000000000000000002",
+  "fullname": {
+    "firstname": "Rahul",
+    "lastname": "Sharma"
+  },
+  "email": "rahul@example.com",
+  "status": "inactive",
+  "vehicle": {
+    "color": "White",
+    "plate": "RJ14AB1234",
+    "capacity": 4,
+    "vehicleType": "car"
+  },
+  "__v": 0
+}
+```
+
+This is an illustrative response; fields depend on the captain schema. The middleware uses `findById()` without explicitly selecting the password field, and the schema declares password with `select: false`.
+
+### `401 Unauthorized` — Authentication failed
+
+Returned if the token is missing, invalid, expired, or blacklisted.
+
+```json
+{
+  "message": "Unauthorized"
+}
+```
+
+## Status codes implemented by this endpoint
+
+| Status code | Meaning | When it is returned |
+|---|---|---|
+| `200 OK` | Profile retrieved | A valid, non-blacklisted JWT identifies a captain. |
+| `401 Unauthorized` | Authentication failed | The token is missing, invalid, expired, or blacklisted. |
+
+## Example request with cURL
+
+Using a Bearer token:
+
+```bash
+curl http://localhost:3000/captains/profile \
+  -H "Authorization: Bearer <jwt-token>"
+```
+
+For cookie-based authentication, send the `token` cookie with the request.
+
+---
+
+# Captain Logout API
+
+Documentation for the `GET /captains/logout` endpoint.
+
+## Endpoint
+
+- **Method:** `GET`
+- **URL:** `/captains/logout`
+- **Purpose:** Logs out the authenticated captain by clearing the `token` cookie and adding the current JWT to the token blacklist.
+- **Authentication:** Required. The route uses `authMiddleware.authCaptain`.
+
+## Authentication
+
+Provide the JWT using either the `token` cookie or an `Authorization: Bearer <jwt-token>` header. The middleware verifies the token and rejects missing, invalid, or already-blacklisted tokens before the controller runs.
+
+## Request body
+
+No request body is required.
+
+## How logout works
+
+1. The authentication middleware validates the current token.
+2. The controller reads the token from the cookie or Authorization header.
+3. It clears the `token` cookie.
+4. It stores the token in the blacklist.
+5. It returns a success message.
+
+Once blacklisted, the token will be rejected by the captain authentication middleware on later requests.
+
+## Responses
+
+### `200 OK` — Logout successful
+
+```json
+{
+  "message": "Logged out successfully"
+}
+```
+
+### `401 Unauthorized` — Authentication failed
+
+Returned by the authentication middleware if the token is missing, invalid, expired, or already blacklisted.
+
+```json
+{
+  "message": "Unauthorized"
+}
+```
+
+## Status codes implemented by this endpoint
+
+| Status code | Meaning | When it is returned |
+|---|---|---|
+| `200 OK` | Logout successful | The token is added to the blacklist and the cookie is cleared. |
+| `401 Unauthorized` | Authentication failed | No usable token is provided, or the token is invalid or blacklisted. |
+
+Unexpected database errors are not explicitly mapped to a response in this controller; their final status depends on the application's error-handling middleware.
+
+## Example request with cURL
+
+Using a Bearer token:
+
+```bash
+curl -X GET http://localhost:3000/captains/logout \
+  -H "Authorization: Bearer <jwt-token>"
+```
+
+For cookie-based authentication, send the `token` cookie with the request. The server clears that cookie in the response.
+
+## Implementation note
+
+The logout controller accesses `req.headers["authorization"].split(" ")[1]` if there is no token cookie. Although the middleware supports Bearer-token authentication, this expression can throw if the Authorization header is absent and no cookie is available. Consider using optional chaining or extracting the token safely before using it.
